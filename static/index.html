@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG Assistant - Document Intelligence</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#fff;color:#1a1a1a;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100dvh;display:grid;grid-template-rows:auto 1fr auto}
+  ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#e5e5e5;border-radius:2px}
+  @keyframes pulse-dot{0%,80%,100%{opacity:.3}40%{opacity:1}}
+  .dot{width:6px;height:6px;border-radius:50%;background:#aaa;display:inline-block;animation:pulse-dot 1.4s infinite ease-in-out}
+  .dot:nth-child(2){animation-delay:.2s}.dot:nth-child(3){animation-delay:.4s}
+</style>
+</head>
+<body>
+<!-- NAV -->
+<nav class="sticky top-0 z-40 bg-white/90 backdrop-blur-sm border-b border-black/10">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="flex items-center justify-between h-14">
+      <div class="flex items-center gap-2.5">
+        <div class="w-7 h-7 rounded-[3px] bg-[#1a1a1a] flex items-center justify-center">
+          <span class="text-white text-[10px] font-bold tracking-tight">R</span>
+        </div>
+        <span class="text-sm font-semibold tracking-tight">RAG Assistant</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="document.getElementById('fileInput').click()" class="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium border border-black/20 rounded-[4px] hover:bg-gray-100 transition-colors">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          <span class="hidden sm:inline">Upload</span>
+        </button>
+        <button onclick="toggleSidebar()" class="p-2 rounded-[4px] hover:bg-gray-100 transition-colors" aria-label="Toggle sidebar">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+  <input id="fileInput" type="file" accept=".pdf,.txt" class="hidden" onchange="handleUpload(this)">
+</nav>
+
+<!-- MAIN -->
+<div class="flex flex-1 min-h-0">
+  <!-- CHAT COLUMN -->
+  <div id="chatColumn" class="flex-1 flex flex-col min-w-0">
+    <!-- WELCOME STATE -->
+    <div id="welcomeState" class="flex-1 flex flex-col items-center justify-center px-4 py-16 sm:py-24">
+      <div class="max-w-lg w-full text-center space-y-8">
+        <div class="w-20 h-20 mx-auto rounded-full border-2 border-black/10 flex items-center justify-center">
+          <svg class="w-9 h-9" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/></svg>
+        </div>
+        <div class="space-y-3">
+          <h1 class="text-3xl sm:text-4xl font-light tracking-tight leading-[1.15]">
+            Document Intelligence<br>
+            <span class="font-semibold">Interface</span>
+          </h1>
+          <p class="text-sm text-gray-500 leading-relaxed max-w-[48ch] mx-auto">
+            Upload PDF or TXT files to extract, index, and query content using keyword retrieval. Powered by FastAPI and a local search pipeline.
+          </p>
+        </div>
+        <div class="flex items-center justify-center gap-3">
+          <button onclick="document.getElementById('fileInput').click()" class="px-5 py-2.5 text-sm font-medium bg-[#1a1a1a] text-white rounded-[4px] hover:bg-black transition-colors">Upload Document</button>
+          <button onclick="tryExampleQuery()" class="px-5 py-2.5 text-sm font-medium border border-black/20 rounded-[4px] hover:bg-gray-50 transition-colors">Try Example Query</button>
+        </div>
+        <p id="indexHint" class="text-[11px] text-gray-400 uppercase tracking-[0.15em]">No documents indexed yet &middot; start by uploading a file</p>
+      </div>
+    </div>
+
+    <!-- CHAT CANVAS -->
+    <div id="chatCanvas" class="hidden flex-1 overflow-y-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div id="messageList" class="max-w-3xl mx-auto space-y-5"></div>
+    </div>
+
+    <!-- INPUT BAR -->
+    <section class="sticky bottom-0 bg-white/95 backdrop-blur-sm border-t border-black/10">
+      <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+        <form onsubmit="handleSubmit(event)" class="flex items-end gap-2">
+          <div class="flex-1 relative">
+            <input id="chatInput" type="text" placeholder="Query your documents..." maxlength="2000" class="w-full px-4 py-2.5 pr-12 text-sm border border-black/20 rounded-[4px] focus:outline-none focus:ring-1 focus:ring-black/30 focus:border-black/30 placeholder:text-gray-300" oninput="updateCharCount(this)">
+            <span id="charCount" class="absolute right-3 bottom-2.5 text-[10px] text-gray-300 pointer-events-none select-none">0/2000</span>
+          </div>
+          <button type="submit" id="sendBtn" disabled class="shrink-0 px-4 py-2.5 bg-[#1a1a1a] text-white text-sm font-medium rounded-[4px] hover:bg-black transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7"/></svg>
+            <span class="hidden sm:inline">Send</span>
+          </button>
+        </form>
+        <div class="flex items-center justify-between mt-1.5 px-1">
+          <div class="flex items-center gap-3 text-[10px] text-gray-400">
+            <span>Max 2000 characters</span>
+            <span class="w-px h-2.5 bg-gray-200"></span>
+            <span>PDF &middot; TXT only</span>
+          </div>
+          <div class="flex items-center gap-1 text-[10px] text-gray-400">
+            <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <span>Keyword search over indexed content</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- SIDEBAR (desktop) -->
+  <aside id="sidebar" class="hidden lg:block shrink-0 w-80 border-l border-black/10 bg-white overflow-hidden">
+    <div class="w-80 p-5 space-y-6">
+      <!-- Upload status -->
+      <div id="uploadStatus" class="hidden bg-gray-50 border border-black/5 rounded-[4px] px-4 py-3 text-sm">
+        <div class="flex items-center gap-2 text-gray-500">
+          <div class="w-3 h-3 rounded-full border border-gray-400 border-t-transparent animate-spin"></div>
+          <span id="uploadStatusText">Uploading...</span>
+        </div>
+      </div>
+      <!-- Documents -->
+      <div>
+        <h3 class="text-xs font-semibold uppercase tracking-[0.12em] text-gray-400 mb-3">Indexed Documents</h3>
+        <div id="docList"><p class="text-sm text-gray-400">No documents indexed yet.</p></div>
+      </div>
+      <!-- System Status -->
+      <div>
+        <h3 class="text-xs font-semibold uppercase tracking-[0.12em] text-gray-400 mb-3">System Status</h3>
+        <div class="border border-black/10 rounded-[4px] divide-y divide-black/5">
+          <div class="flex items-center justify-between px-3 py-2"><span class="text-sm text-gray-500">File Storage</span><span id="storageVal" class="text-[11px] font-medium uppercase tracking-[0.08em] text-green-700">Empty</span></div>
+          <div class="flex items-center justify-between px-3 py-2"><span class="text-sm text-gray-500">Backend</span><span class="text-[11px] font-medium uppercase tracking-[0.08em] text-green-700">Running</span></div>
+          <div class="flex items-center justify-between px-3 py-2"><span class="text-sm text-gray-500">CORS</span><span class="text-[11px] font-medium uppercase tracking-[0.08em] text-green-700">Enabled</span></div>
+          <div class="flex items-center justify-between px-3 py-2"><span class="text-sm text-gray-500">Search</span><span class="text-[11px] font-medium uppercase tracking-[0.08em] text-green-700">Keyword</span></div>
+        </div>
+      </div>
+      <!-- Privacy -->
+      <div class="bg-gray-50 border border-black/5 rounded-[4px] p-4">
+        <div class="flex items-start gap-2.5">
+          <svg class="w-4 h-4 text-gray-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+          <div>
+            <h4 class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500 mb-1">Privacy &amp; Security</h4>
+            <p class="text-[11px] text-gray-400 leading-relaxed">Document processing occurs locally. Content is extracted via pypdf and stored in AGENTS.md. No data is transmitted to external services.</p>
+          </div>
+        </div>
+      </div>
+      <div class="border border-black/10 rounded-[4px] overflow-hidden">
+        <img src="https://picsum.photos/seed/rag-architecture/320/180" alt="RAG architecture diagram" class="w-full h-auto" loading="lazy">
+      </div>
+    </div>
+  </aside>
+
+  <!-- MOBILE SIDEBAR OVERLAY -->
+  <div id="mobileSidebar" class="fixed inset-0 z-50 hidden lg:hidden">
+    <div class="absolute inset-0 bg-black/20" onclick="toggleSidebar()"></div>
+    <div class="absolute right-0 top-0 bottom-0 w-80 max-w-[85vw] bg-white border-l border-black/10 overflow-y-auto p-5 shadow-xl">
+      <div class="flex items-center justify-between mb-5">
+        <span class="text-sm font-semibold">Documents</span>
+        <button onclick="toggleSidebar()" class="p-1.5 hover:bg-gray-100 rounded-[4px]">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div id="mobileDocSection"><p class="text-sm text-gray-400">No documents indexed yet.</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer class="border-t border-black/10 bg-white">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
+    <div class="flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-gray-400">
+      <p>RAG Document Assistant &middot; FastAPI + HTML</p>
+      <p class="flex items-center gap-2">
+        <span>Local processing</span>
+        <span class="w-px h-2.5 bg-gray-200"></span>
+        <span>Keyword retrieval</span>
+      </p>
+    </div>
+  </div>
+</footer>
+
+<script>
+const API = 'http://127.0.0.1:8080';
+let isTyping = false;
+let sidebarOpen = false;
+let docs = [];
+let chatStarted = false;
+
+function updateCharCount(inp) {
+  document.getElementById('charCount').textContent = inp.value.length + '/2000';
+  document.getElementById('sendBtn').disabled = !inp.value.trim() || isTyping;
+}
+
+function addMessage(role, content, sources) {
+  const list = document.getElementById('messageList');
+  const div = document.createElement('div');
+  div.className = 'flex gap-3 ' + (role === 'user' ? 'flex-row-reverse' : '');
+
+  const now = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+
+  div.innerHTML = `
+    <div class="shrink-0 w-7 h-7 rounded-full border border-black/10 flex items-center justify-center ${role === 'assistant' ? 'bg-white' : 'bg-[#1a1a1a]'}">
+      ${role === 'assistant'
+        ? '<svg class="w-3.5 h-3.5" fill="none" stroke="#1a1a1a" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>'
+        : '<svg class="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>'
+      }
+    </div>
+    <div class="max-w-[75%] ${role === 'user' ? 'text-right' : ''}">
+      <div class="inline-block px-4 py-2.5 text-sm leading-relaxed rounded-[4px] whitespace-pre-wrap text-left ${role === 'assistant' ? 'bg-gray-50 border border-black/5 text-[#1a1a1a]' : 'bg-[#1a1a1a] text-white'}">
+        ${content}
+        ${sources && sources.length ? '<div class="mt-2 pt-2 border-t border-black/5 space-y-1">' +
+          sources.slice(0,2).map(s => '<div class="flex items-start gap-1.5 text-[11px] text-gray-400"><svg class="w-3 h-3 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg><span class="line-clamp-2">'+s+'</span></div>').join('') + '</div>' : ''}
+      </div>
+      <p class="text-[11px] text-gray-400 mt-1 px-1">${now}</p>
+    </div>`;
+  list.appendChild(div);
+  document.getElementById('chatCanvas').scrollTop = document.getElementById('chatCanvas').scrollHeight;
+}
+
+function showTyping() {
+  const list = document.getElementById('messageList');
+  const div = document.createElement('div');
+  div.id = 'typingIndicator';
+  div.className = 'flex gap-3';
+  div.innerHTML = `
+    <div class="shrink-0 w-7 h-7 rounded-full border border-black/10 flex items-center justify-center bg-white">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="#1a1a1a" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+    </div>
+    <div class="inline-block px-4 py-3 rounded-[4px] bg-gray-50 border border-black/5">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+    </div>`;
+  list.appendChild(div);
+  document.getElementById('chatCanvas').scrollTop = document.getElementById('chatCanvas').scrollHeight;
+}
+
+function hideTyping() {
+  const el = document.getElementById('typingIndicator');
+  if (el) el.remove();
+}
+
+function showChat() {
+  if (chatStarted) return;
+  chatStarted = true;
+  document.getElementById('welcomeState').classList.add('hidden');
+  document.getElementById('chatCanvas').classList.remove('hidden');
+}
+
+async function fetchHealth() {
+  try {
+    const r = await fetch(API + '/health/');
+    const d = await r.json();
+    document.getElementById('storageVal').textContent = d.indexed ? (d.char_count / 1024).toFixed(1) + ' KB' : 'Empty';
+    const hint = document.getElementById('indexHint');
+    if (d.indexed) {
+      hint.textContent = d.char_count.toLocaleString() + ' characters indexed';
+      hint.className = 'text-[11px] text-gray-400';
+    }
+  } catch(e) {}
+}
+
+async function handleSubmit(e) {
+  e.preventDefault();
+  const inp = document.getElementById('chatInput');
+  const text = inp.value.trim();
+  if (!text || isTyping) return;
+
+  showChat();
+  addMessage('user', text);
+  inp.value = '';
+  updateCharCount(inp);
+  isTyping = true;
+  document.getElementById('sendBtn').disabled = true;
+  showTyping();
+
+  try {
+    const r = await fetch(API + '/query/', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: text})
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || 'Server error');
+    const d = await r.json();
+    hideTyping();
+    const reply = d.chunks && d.chunks.length
+      ? 'Found ' + d.matches + ' relevant passage' + (d.matches > 1 ? 's' : '') + ' in the document. Here is the most relevant context:\n\n' + d.chunks[0]
+      : 'No relevant passages found in the indexed document for your query. Try rephrasing or uploading a different document.';
+    addMessage('assistant', reply, d.chunks || []);
+  } catch(err) {
+    hideTyping();
+    addMessage('assistant', 'Error: ' + err.message + '. Make sure the backend is running and a document is indexed.');
+  } finally {
+    isTyping = false;
+    updateCharCount(inp);
+  }
+}
+
+async function handleUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  showUploadUI('Uploading...');
+  const id = Date.now();
+  addDocToList({id, name: file.name, status: 'processing', pages: 1});
+  input.value = '';
+
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const r = await fetch(API + '/upload/', {method: 'POST', body: fd});
+    if (!r.ok) throw new Error((await r.json()).detail || 'Upload failed');
+    const d = await r.json();
+    hideUploadUI();
+    updateDocStatus(id, 'indexed', Math.ceil(d.extracted_chars / 2000) || 1);
+    showChat();
+    addMessage('assistant', 'Document indexed: ' + file.name + ' (' + d.extracted_chars + ' characters extracted). You can now ask questions about it.');
+    fetchHealth();
+  } catch(err) {
+    hideUploadUI();
+    updateDocStatus(id, 'error', 1);
+    addMessage('assistant', 'Upload failed: ' + err.message + '. Is the backend running at ' + API + '?');
+  }
+}
+
+async function tryExampleQuery() {
+  const q = 'Show me the document content.';
+  showChat();
+  addMessage('user', q);
+  isTyping = true;
+  document.getElementById('sendBtn').disabled = true;
+  showTyping();
+
+  try {
+    const r = await fetch(API + '/query/', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: q})
+    });
+    const d = await r.json();
+    hideTyping();
+    const reply = d.chunks && d.chunks.length
+      ? 'Found ' + d.matches + ' passages. Top result:\n\n' + d.chunks[0]
+      : 'No relevant content found. Try uploading a document first.';
+    addMessage('assistant', reply);
+  } catch {
+    hideTyping();
+    addMessage('assistant', 'Error: backend not reachable. Start the server with `uvicorn main:app --port 8000`.');
+  } finally {
+    isTyping = false;
+    document.getElementById('sendBtn').disabled = !document.getElementById('chatInput').value.trim();
+  }
+}
+
+function toggleSidebar() {
+  sidebarOpen = !sidebarOpen;
+  const sidebar = document.getElementById('sidebar');
+  const mobile = document.getElementById('mobileSidebar');
+  if (window.innerWidth < 1024) {
+    mobile.classList.toggle('hidden');
+  } else {
+    sidebar.classList.toggle('hidden');
+  }
+}
+
+function showUploadUI(text) {
+  const el = document.getElementById('uploadStatus');
+  document.getElementById('uploadStatusText').textContent = text;
+  el.classList.remove('hidden');
+}
+
+function hideUploadUI() {
+  document.getElementById('uploadStatus').classList.add('hidden');
+}
+
+function addDocToList(doc) {
+  docs.unshift(doc);
+  renderDocLists();
+}
+
+function updateDocStatus(id, status, pages) {
+  const d = docs.find(x => x.id === id);
+  if (d) { d.status = status; d.pages = pages; }
+  renderDocLists();
+}
+
+function renderDocLists() {
+  const html = docs.length
+    ? docs.map(d => `
+      <div class="group flex items-start gap-3 p-2.5 rounded-[4px] hover:bg-gray-50 transition-colors">
+        <div class="shrink-0 w-8 h-8 rounded-[4px] border border-black/10 flex items-center justify-center bg-gray-50">
+          <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-medium truncate">${d.name}</p>
+          <div class="flex items-center gap-2 text-[11px] text-gray-400 mt-0.5">
+            <span>${d.pages} page${d.pages > 1 ? 's' : ''}</span>
+            <span class="w-px h-2 bg-gray-200"></span>
+            <span class="flex items-center gap-1 ${d.status === 'error' ? 'text-red-500' : 'text-green-600'}">
+              ${d.status === 'error' ? '<svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' : '<svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>'}
+              ${d.status}
+            </span>
+          </div>
+        </div>
+      </div>`).join('')
+    : '<p class="text-sm text-gray-400">No documents indexed yet.</p>';
+  document.getElementById('docList').innerHTML = html;
+  document.getElementById('mobileDocSection').innerHTML = '<h3 class="text-xs font-semibold uppercase tracking-[0.12em] text-gray-400 mb-3">Indexed Documents</h3>' + html;
+}
+
+fetchHealth();
+</script>
+</body>
+</html>

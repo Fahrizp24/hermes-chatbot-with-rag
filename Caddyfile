@@ -1,0 +1,13 @@
+{
+	http_port 8080
+	https_port 4430
+}
+
+:8080 {
+	handle_path /api/* {
+		reverse_proxy localhost:8000
+	}
+	reverse_proxy localhost:3000 {
+		header_up Host localhost
+	}
+}

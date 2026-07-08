@@ -1,0 +1,60 @@
+iii 
+ 
+PERSETUJUAN DAN PENGESAHAN 
+LAPORAN KERJA PRAKTEK 
+ 
+NIM   : 230040123 
+Nama   : Made Dwi Mahesa Paramaarta 
+Jenjang Studi  : Strata Satu (S1) 
+Program Studi  : Teknologi Informasi 
+Judul Kerja Praktek : Rancang Bangun Arsitektur Multi-Agent Asynchronous 
+untuk Otomasi Task Berbasis LLM di PT Timedoor 
+Indonesia 
+ 
+ 
+Disetujui Oleh: 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+  
+Tanggal ……………………………… 
+ 
+Pembina 
+ 
+ 
+ 
+(I Nyoman Darma Kotama, S.T., M.T.) 
+Tanggal ……………………………… 
+ 
+Pembimbing 
+ 
+ 
+ 
+(Ni Wayan Setiasih, S.Sn., M.Sn.) 
+ 
+Tanggal ……………………………… 
+Ketua Program Studi 
+ 
+ 
+ 
+(I Wayan Ardiyasa, S.Kom., M.MSI.) 
+ 
+ 
+iv 
+ 
+Halaman ini sengaja dikosongkan  
+ 
+v 
+ 
+KATA PENGANTAR 
+Berkat rahmat Tuhan Yang Maha Esa penulis dapat menyelesaikan 
+Laporan Kerja Praktek yang berjudul “ Rancang Bangun Arsitektur Multi -Agent 
+Asynchronous untuk Otomasi Task Berbasis L LM di  PT Timedoor Indonesia ” 
+sesuai dengan yang direncanakan. Selanjutnya penulis menyampaikan terima  
+kasih kepada: 
+1. Bapak Rektor ITB STI

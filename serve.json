@@ -1,0 +1,22 @@
+{
+  "Web": {
+    "reee-1.tail9dfbd7.ts.net:443": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://127.0.0.1:3000"
+        },
+        "/api": {
+          "Proxy": "http://127.0.0.1:8000"
+        }
+      }
+    }
+  },
+  "TCP": {
+    "443": {
+      "HTTPS": true
+    }
+  },
+  "AllowFunnel": {
+    "reee-1.tail9dfbd7.ts.net:443": true
+  }
+}
