@@ -69,6 +69,7 @@ export default function ChatbotInterface() {
   const [dark, setDark] = useState(true);
   const [lastTime, setLastTime] = useState<string | null>(null);
   const [lastTokens, setLastTokens] = useState<number | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -149,6 +150,7 @@ export default function ChatbotInterface() {
     if (!file) return;
 
     setUploadState('uploading');
+    setUploadProgress(0);
     const tempDoc: DocumentRef = {
       id: `d${Date.now()}`,
       name: file.name,
@@ -159,16 +161,47 @@ export default function ChatbotInterface() {
     setDocuments((prev) => [tempDoc, ...prev]);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await fetch(`${API}/upload/`, { method: 'POST', body: formData });
+      const data = await new Promise<any>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        const formData = new FormData();
+        formData.append('file', file);
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || `Upload failed (${res.status})`);
-      }
+        xhr.upload.addEventListener('progress', (evt) => {
+          if (evt.lengthComputable) {
+            const pct = Math.round((evt.loaded / evt.total) * 100);
+            setUploadProgress(pct);
+          }
+        });
 
-      const data = await res.json();
+        xhr.upload.addEventListener('load', () => {
+          // Upload complete — server is now processing
+          setUploadState('processing');
+        });
+
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              resolve(JSON.parse(xhr.responseText));
+            } catch {
+              reject(new Error('Invalid server response'));
+            }
+          } else {
+            try {
+              const err = JSON.parse(xhr.responseText);
+              reject(new Error(err.detail || `Upload failed (${xhr.status})`));
+            } catch {
+              reject(new Error(`Upload failed (${xhr.status})`));
+            }
+          }
+        });
+
+        xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+        xhr.addEventListener('abort', () => reject(new Error('Upload aborted')));
+
+        xhr.open('POST', `${API}/upload/`);
+        xhr.send(formData);
+      });
+
       setUploadState('success');
       setDocuments((prev) =>
         prev.map((d) =>
@@ -197,7 +230,7 @@ export default function ChatbotInterface() {
       };
       setMessages((prev) => [...prev, errMsg]);
     } finally {
-      setTimeout(() => setUploadState('idle'), 2000);
+      setTimeout(() => { setUploadState('idle'); setUploadProgress(0); }, 2000);
     }
   }, []);
 
@@ -265,6 +298,36 @@ export default function ChatbotInterface() {
             <span style={{ color: 'var(--border-light)' }}>/</span>
             <span style={{ color: 'var(--text-primary)' }}>query</span>
           </div>
+
+          {/* ---- UPLOAD PROGRESS ---- */}
+          {(uploadState === 'uploading' || uploadState === 'processing') && (
+            <div
+              className="flex items-center gap-3 px-4 py-2 text-[11px] shrink-0"
+              style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)' }}
+            >
+              {uploadState === 'uploading' ? (
+                <>
+                  <div className="flex-1 h-2 rounded-[2px]" style={{ background: 'var(--border)' }}>
+                    <div
+                      className="h-full rounded-[2px] transition-all duration-200"
+                      style={{
+                        width: `${uploadProgress}%`,
+                        background: 'var(--accent)',
+                      }}
+                    />
+                  </div>
+                  <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', minWidth: 48, textAlign: 'right' }}>
+                    {uploadProgress}%
+                  </span>
+                </>
+              ) : (
+                <>
+                  <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: 'var(--accent)', borderTopColor: 'transparent' }} />
+                  <span style={{ color: 'var(--text-muted)' }}>Processing document...</span>
+                </>
+              )}
+            </div>
+          )}
 
           {/* ---- WELCOME / EMPTY ---- */}
           {isWelcome && (

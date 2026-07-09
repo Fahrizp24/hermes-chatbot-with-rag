@@ -31,7 +31,7 @@ openrouter_client = OpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_
 # ---------------------------------------------------------------------------
 # Vector store – FAISS + dense embeddings (multilingual)
 # ---------------------------------------------------------------------------
-EMBED_MODEL = TextEmbedding(model_name="intfloat/multilingual-e5-small")
+EMBED_MODEL = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
 EMBED_DIM = 384
 TOP_K = 10
 
@@ -51,7 +51,11 @@ def _init_index() -> faiss.Index:
 
 
 def _load_state() -> None:
-    """Reload persisted vectors, chunks & metadata from disk."""
+    """Reload persisted vectors, chunks & metadata from disk.
+
+    If vectors file is absent but chunks exist, the index is rebuilt
+    lazily on the first query (not at startup) to avoid blocking boot.
+    """
     global doc_metadata, chunk_texts, embedding_index
     try:
         if METADATA_FILE.exists():
@@ -62,7 +66,7 @@ def _load_state() -> None:
                 for line in CHUNKS_FILE.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
-        if VECTORS_FILE.exists() and chunk_texts:
+        if VECTORS_FILE.exists():
             embedding_index = faiss.read_index(str(VECTORS_FILE))
         else:
             embedding_index = _init_index()
@@ -85,45 +89,43 @@ def _save_state() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Word‑based chunking
+# LlamaIndex-based sentence-aware chunking
 # ---------------------------------------------------------------------------
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.schema import Document
+
+
 def chunk_text_by_words(text: str, chunk_words: int = 200, overlap_words: int = 25) -> list[str]:
-    """Split *text* into overlapping chunks of ~*chunk_words* words each."""
-    text = text.strip()
-    words = text.split()
-    if not words:
-        return []
-    if len(words) <= chunk_words:
-        return [text]
-    chunks = []
-    start = 0
-    while start < len(words):
-        end = min(start + chunk_words, len(words))
-        chunk = " ".join(words[start:end]).strip()
-        if chunk:
-            chunks.append(chunk)
-        if end == len(words):
-            break
-        start = end - overlap_words
-    return chunks
+    """Chunk text using LlamaIndex SentenceSplitter.
+
+    Respects sentence & paragraph boundaries — won't cut mid-sentence/dialog.
+    chunk_words/overlap_words are approximated from character-based SentenceSplitter
+    (≈6 chars/word average).
+    """
+    splitter = SentenceSplitter(
+        chunk_size=chunk_words * 6,
+        chunk_overlap=overlap_words * 6,
+        paragraph_separator="\n\n",
+    )
+    nodes = splitter.get_nodes_from_documents([Document(text=text)])
+    return [n.get_content() for n in nodes]
 
 
 # ---------------------------------------------------------------------------
 # Embedding helpers (multilingual-e5 needs passage:/query: prefixes)
 # ---------------------------------------------------------------------------
 def _embed_texts(texts: list[str]) -> np.ndarray:
-    """Generate normalised dense embeddings for a list of passages."""
-    prefixed = [f"passage: {t}" for t in texts]
-    vecs = np.concatenate(list(EMBED_MODEL.embed(prefixed)))
+    """Generate normalised dense embeddings for a list of texts."""
+    vecs = np.array(list(EMBED_MODEL.embed(texts)), dtype=np.float32)
     faiss.normalize_L2(vecs)
     return vecs
 
 
 def _embed_query(query: str) -> np.ndarray:
     """Generate normalised embedding for a single query."""
-    vec = np.concatenate(list(EMBED_MODEL.query_embed(query)))
-    faiss.normalize_L2(vec)
-    return vec
+    vecs = np.array(list(EMBED_MODEL.query_embed(query)), dtype=np.float32)
+    faiss.normalize_L2(vecs)
+    return vecs
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +215,7 @@ async def upload_file(file: UploadFile = File(...)):
 
         # --- Word‑based chunking ---
         global doc_metadata, chunk_texts, embedding_index
-        doc_metadata = text_content[:1000].strip()
+        doc_metadata = " ".join(text_content.split()[:200]).strip()
         chunks = chunk_text_by_words(text_content, chunk_words=200, overlap_words=25)
 
         if not chunks:
@@ -251,6 +253,7 @@ async def upload_file(file: UploadFile = File(...)):
 @app.post("/query")
 @app.post("/query/")
 async def query_documents(data: dict):
+    global embedding_index
     query = data.get("query", "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="Query is required.")
@@ -268,6 +271,14 @@ async def query_documents(data: dict):
     # Ensure state is loaded
     if not chunk_texts:
         _load_state()
+
+    # Lazy rebuild: chunks exist but no saved FAISS index
+    if chunk_texts and (embedding_index is None or embedding_index.ntotal == 0):
+        print(f"Lazily rebuilding FAISS index from {len(chunk_texts)} chunks...")
+        embedding_index = _init_index()
+        embedding_index.add(_embed_texts(chunk_texts))
+        _save_state()
+
     if not chunk_texts or embedding_index is None or embedding_index.ntotal == 0:
         raise HTTPException(status_code=404, detail="No document indexed yet. Upload a file first.")
 
@@ -306,7 +317,7 @@ def generate_answer(query: str, chunks: list[str], metadata: str) -> str:
         if not c:
             return False, "Client not configured", False
 
-        top_chunk = chunks[0] if chunks else "(Tidak ada konteks yang relevan.)"
+        context = "\n\n---\n\n".join(chunks[:3]) if chunks else "(Tidak ada konteks yang relevan.)"
 
         system_prompt = f"""Kamu adalah asisten dokumen AI yang cerdas, ramah, dan natural dalam berbahasa Indonesia.
 
@@ -320,7 +331,7 @@ Aturan:
 {metadata}
 
 [KONTEKS]
-{top_chunk}"""
+{context}"""
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -333,7 +344,7 @@ Aturan:
                     model=model,
                     messages=messages,
                     temperature=0.3,
-                    max_tokens=1024,
+                    max_tokens=4096,
                 )
                 return True, resp.choices[0].message.content.strip(), False
             except Exception as e:

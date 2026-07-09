@@ -103,10 +103,18 @@
   <aside id="sidebar" class="hidden lg:block shrink-0 w-80 border-l border-black/10 bg-white overflow-hidden">
     <div class="w-80 p-5 space-y-6">
       <!-- Upload status -->
-      <div id="uploadStatus" class="hidden bg-gray-50 border border-black/5 rounded-[4px] px-4 py-3 text-sm">
-        <div class="flex items-center gap-2 text-gray-500">
-          <div class="w-3 h-3 rounded-full border border-gray-400 border-t-transparent animate-spin"></div>
-          <span id="uploadStatusText">Uploading...</span>
+      <div id="uploadStatus" class="hidden bg-gray-50 border border-black/5 rounded-[4px] px-4 py-3">
+        <div id="uploadProgressSection" class="flex items-center gap-2 text-gray-500">
+          <div id="uploadSpinner" class="w-3 h-3 rounded-full border border-gray-400 border-t-transparent animate-spin"></div>
+          <span id="uploadStatusText" class="text-sm">Uploading...</span>
+        </div>
+        <div id="uploadProgressBar" class="hidden mt-2">
+          <div class="flex items-center gap-2">
+            <div class="flex-1 h-2 bg-gray-200 rounded-[2px] overflow-hidden">
+              <div id="uploadProgressFill" class="h-full bg-[#1a1a1a] rounded-[2px] transition-all duration-200" style="width:0%"></div>
+            </div>
+            <span id="uploadProgressPct" class="text-[11px] text-gray-400 font-mono tabular-nums min-w-[36px] text-right">0%</span>
+          </div>
         </div>
       </div>
       <!-- Documents -->
@@ -284,31 +292,99 @@ async function handleSubmit(e) {
   }
 }
 
-async function handleUpload(input) {
+/* ---- Upload with progress bar ---- */
+function showUploadUI(type, pct) {
+  const el = document.getElementById('uploadStatus');
+  const spinner = document.getElementById('uploadSpinner');
+  const bar = document.getElementById('uploadProgressBar');
+  const text = document.getElementById('uploadStatusText');
+  const fill = document.getElementById('uploadProgressFill');
+  const pctLabel = document.getElementById('uploadProgressPct');
+
+  if (type === 'uploading') {
+    spinner.classList.remove('hidden');
+    bar.classList.remove('hidden');
+    text.textContent = 'Uploading...';
+    fill.style.width = (pct || 0) + '%';
+    pctLabel.textContent = (pct || 0) + '%';
+  } else if (type === 'processing') {
+    spinner.classList.remove('hidden');
+    bar.classList.add('hidden');
+    text.textContent = 'Processing document...';
+  } else {
+    text.textContent = type === 'error' ? 'Upload failed' : 'Upload complete';
+    bar.classList.add('hidden');
+    spinner.classList.add('hidden');
+  }
+  el.classList.remove('hidden');
+}
+
+function hideUploadUI() {
+  document.getElementById('uploadStatus').classList.add('hidden');
+}
+
+function handleUploadError(id, msg) {
+  showUploadUI('error');
+  updateDocStatus(id, 'error', 1);
+  addMessage('assistant', 'Upload failed: ' + msg + '. Is the backend running at ' + API + '?');
+}
+
+function handleUpload(input) {
   const file = input.files[0];
   if (!file) return;
 
-  showUploadUI('Uploading...');
+  showUploadUI('uploading', 0);
   const id = Date.now();
   addDocToList({id, name: file.name, status: 'processing', pages: 1});
   input.value = '';
 
-  try {
-    const fd = new FormData();
-    fd.append('file', file);
-    const r = await fetch(API + '/upload/', {method: 'POST', body: fd});
-    if (!r.ok) throw new Error((await r.json()).detail || 'Upload failed');
-    const d = await r.json();
-    hideUploadUI();
-    updateDocStatus(id, 'indexed', Math.ceil(d.extracted_chars / 2000) || 1);
-    showChat();
-    addMessage('assistant', 'Document indexed: ' + file.name + ' (' + d.extracted_chars + ' characters extracted). You can now ask questions about it.');
-    fetchHealth();
-  } catch(err) {
-    hideUploadUI();
-    updateDocStatus(id, 'error', 1);
-    addMessage('assistant', 'Upload failed: ' + err.message + '. Is the backend running at ' + API + '?');
-  }
+  const xhr = new XMLHttpRequest();
+  const fd = new FormData();
+  fd.append('file', file);
+
+  xhr.upload.addEventListener('progress', function(evt) {
+    if (evt.lengthComputable) {
+      const pct = Math.round((evt.loaded / evt.total) * 100);
+      showUploadUI('uploading', pct);
+    }
+  });
+
+  xhr.upload.addEventListener('load', function() {
+    showUploadUI('processing');
+  });
+
+  xhr.addEventListener('load', function() {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      try {
+        const d = JSON.parse(xhr.responseText);
+        hideUploadUI();
+        updateDocStatus(id, 'indexed', Math.ceil(d.extracted_chars / 2000) || 1);
+        showChat();
+        addMessage('assistant', 'Document indexed: ' + file.name + ' (' + d.extracted_chars + ' characters extracted). You can now ask questions about it.');
+        fetchHealth();
+      } catch(e) {
+        handleUploadError(id, 'Invalid server response');
+      }
+    } else {
+      try {
+        const err = JSON.parse(xhr.responseText);
+        handleUploadError(id, err.detail || 'Upload failed (' + xhr.status + ')');
+      } catch(e) {
+        handleUploadError(id, 'Upload failed (' + xhr.status + ')');
+      }
+    }
+  });
+
+  xhr.addEventListener('error', function() {
+    handleUploadError(id, 'Network error during upload');
+  });
+
+  xhr.addEventListener('abort', function() {
+    handleUploadError(id, 'Upload aborted');
+  });
+
+  xhr.open('POST', API + '/upload/');
+  xhr.send(fd);
 }
 
 async function tryExampleQuery() {
@@ -349,16 +425,6 @@ function toggleSidebar() {
   } else {
     sidebar.classList.toggle('hidden');
   }
-}
-
-function showUploadUI(text) {
-  const el = document.getElementById('uploadStatus');
-  document.getElementById('uploadStatusText').textContent = text;
-  el.classList.remove('hidden');
-}
-
-function hideUploadUI() {
-  document.getElementById('uploadStatus').classList.add('hidden');
 }
 
 function addDocToList(doc) {
