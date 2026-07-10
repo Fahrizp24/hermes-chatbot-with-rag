@@ -89,26 +89,60 @@ def _save_state() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LlamaIndex-based sentence-aware chunking
+# Document-aware chunking — LlamaIndex MarkdownNodeParser
 # ---------------------------------------------------------------------------
-from llama_index.core.node_parser import SentenceSplitter
+import re
+from llama_index.core.node_parser import MarkdownNodeParser
 from llama_index.core.schema import Document
 
 
-def chunk_text_by_words(text: str, chunk_words: int = 200, overlap_words: int = 25) -> list[str]:
-    """Chunk text using LlamaIndex SentenceSplitter.
+def chunk_by_document(text: str, target_words: int = 200, max_words: int = 300) -> list[str]:
+    """Chunk text respecting document structure (headings, paragraphs).
 
-    Respects sentence & paragraph boundaries — won't cut mid-sentence/dialog.
-    chunk_words/overlap_words are approximated from character-based SentenceSplitter
-    (≈6 chars/word average).
+    Uses LlamaIndex MarkdownNodeParser under the hood.
+    Detects Indonesian document headings (BAB, Pasal, Bagian, dll)
+    and uses them as natural chunk boundaries.
     """
-    splitter = SentenceSplitter(
-        chunk_size=chunk_words * 6,
-        chunk_overlap=overlap_words * 6,
-        paragraph_separator="\n\n",
+    # Preprocess common Indonesian heading patterns → markdown headings
+    # so MarkdownNodeParser can split on them
+    _preprocessed = re.sub(
+        r"(?m)^(BAB\s+[IVXLCDM\d]+|Pasal\s+\d+|Bagian\s+\d+|Subbab\s+\d+)\.?\s*$",
+        r"# \1",
+        text,
     )
-    nodes = splitter.get_nodes_from_documents([Document(text=text)])
-    return [n.get_content() for n in nodes]
+
+    doc = Document(text=_preprocessed)
+    parser = MarkdownNodeParser()
+    nodes = parser.get_nodes_from_documents([doc])
+
+    chunks: list[str] = []
+    for node in nodes:
+        content = node.get_content().strip()
+        if not content:
+            continue
+
+        wc = len(content.split())
+        # Single short chunk → keep as-is
+        if wc <= max_words:
+            chunks.append(content)
+            continue
+
+        # Long section → split per paragraph, merge up to target_words
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", content) if p.strip()]
+        current: list[str] = []
+        cw = 0
+        for para in paragraphs:
+            pw = len(para.split())
+            if current and cw + pw > target_words and cw >= target_words * 0.5:
+                chunks.append("\n\n".join(current))
+                current = []
+                cw = 0
+            current.append(para)
+            cw += pw
+        if current:
+            chunks.append("\n\n".join(current))
+
+    return chunks if chunks else [text]
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +239,7 @@ async def upload_file(file: UploadFile = File(...)):
             for page in reader.pages:
                 txt = page.extract_text()
                 if txt:
-                    parts.append(txt)
+                    parts.append(txt)   
             text_content = "\n".join(parts)
             if not text_content.strip():
                 raise ValueError("PDF has no extractable text.")
@@ -216,7 +250,7 @@ async def upload_file(file: UploadFile = File(...)):
         # --- Word‑based chunking ---
         global doc_metadata, chunk_texts, embedding_index
         doc_metadata = " ".join(text_content.split()[:200]).strip()
-        chunks = chunk_text_by_words(text_content, chunk_words=200, overlap_words=25)
+        chunks = chunk_by_document(text_content)
 
         if not chunks:
             raise HTTPException(status_code=400, detail="No extractable content in file.")
@@ -317,7 +351,7 @@ def generate_answer(query: str, chunks: list[str], metadata: str) -> str:
         if not c:
             return False, "Client not configured", False
 
-        context = "\n\n---\n\n".join(chunks[:3]) if chunks else "(Tidak ada konteks yang relevan.)"
+        context = "\n\n---\n\n".join(chunks[:10]) if chunks else "(Tidak ada konteks yang relevan.)"
 
         system_prompt = f"""Kamu adalah asisten dokumen AI yang cerdas, ramah, dan natural dalam berbahasa Indonesia.
 

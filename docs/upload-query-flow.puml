@@ -1,0 +1,160 @@
+@startuml
+skinparam style strictuml
+skinparam DefaultFontName Inter
+skinparam ActivityBackgroundColor #F9FAFB
+skinparam ActivityBorderColor #374151
+skinparam ArrowColor #374151
+skinparam NoteBackgroundColor #E5E7EB
+skinparam NoteBorderColor #9CA3AF
+
+|Browser (User)|
+|Next.js (Proxy)|
+|FastAPI (Backend)|
+|LLM (OpenCode/OR)|
+
+' =============================================
+' ALUR 1: UPLOAD DOCUMENT
+' =============================================
+|Browser (User)|
+start
+:Klik "Upload Document"\n(Pilih PDF/TXT);
+|Next.js (Proxy)|
+:POST /api/upload/;
+note right
+  skipTrailingSlashRedirect: true
+  (agar form-data POST tidak
+  kehilangan data di 308 redirect)
+end note
+|FastAPI (Backend)|
+:Validasi & Ekstrak teks\n(pypdf untuk PDF);
+:Simpan **doc_metadata**\n(200 kata pertama ≈ 1200 char);
+:Chunking dokumen:\n**chunk_by_document()**
+  • Pisah per paragraf (blank line)
+  • Deteksi heading:\n    BAB, Pasal, Bagian, Subbab
+  • Gabung paragraf hingga ~200 kata
+  • Satu seksi = satu chunk;
+note right
+  LlamaIndex MarkdownNodeParser:\n  Preprocess heading Indonesia
+  "# BAB I" → split otomatis
+end note
+:Embedding tiap chunk\n(BAAI/bge-small-en-v1.5, 384-d);
+:Simpan ke FAISS\n(IndexFlatIP);
+:Persist ke disk:
+  • .chunks.jsonl
+  • .metadata.txt
+  • .vectors.faiss;
+:Return JSON Success;
+|Next.js (Proxy)|
+:Fetch /api/health/;
+|Browser (User)|
+:Tampilkan "Document indexed";
+stop
+
+' =============================================
+' ALUR 2: QUERY FLOW
+' =============================================
+|Browser (User)|
+start
+:Ketik Pertanyaan & Submit;
+|Next.js (Proxy)|
+:POST /api/query/;
+|FastAPI (Backend)|
+if (Apakah Sapaan?) then (Ya → balik langsung)
+    :Generate _greeting_reply();
+    :Return JSON (matches: 0);
+    |Next.js (Proxy)|
+    :Parse Respon;
+    |Browser (User)|
+    :Render Jawaban;
+    stop
+else (Tidak)
+    :Load state dari disk\n(bila belum di-load);
+endif
+
+if (FAISS index kosong\n& chunks exist?) then (Ya)
+    :Lazy rebuild FAISS\nembed → add → save;
+else (Tidak)
+endif
+
+if (Chunks & index siap?) then (Tidak)
+  :Return 404\n"Upload file dulu";
+  detach
+endif
+
+:Vector search FAISS\n**TOP_K = 10**\n(IndexFlatIP → cosine sim);
+note right
+  Jarak vektor (dot product)\n  dari 384-d embedding.
+end note
+
+:Ambil chunks hasil search;
+if (Hasil kosong?) then (Ya)
+    :Fallback:\nambil 3 chunk pertama;
+else (Tidak)
+endif
+
+:Susun **system_prompt**:
+  • [INFO DOKUMEN] = metadata
+  • [KONTEKS] = chunks[:10]
+    (gabung via --- separator);
+|FastAPI (Backend)|
+:Generate answer:
+  **generate_answer()**;
+
+' --- LLM subflow ---
+|LLM (OpenCode/OR)|
+:Primary: OpenCode
+  model: deepseek-chat
+  max_tokens: 4096
+  temp: 0.3;
+if (Sukses?) then (Ya)
+else (Error)
+  if (Rate limit / quota?) then (Ya)
+    :Fallback: OpenRouter\n(OpenRouter auto);
+    if (Sukses?) then (Ya)
+    else (Error)
+    endif
+  else (Error lain)
+    :Retry up to 2x\ndengan backoff;
+  endif
+endif
+:Return Answer;
+|FastAPI (Backend)|
+if (Semua LLM gagal?) then (Ya)
+  :**Keyword fallback**\ntampilkan chunk[0]\nsebagai teks mentah;
+else (Tidak)
+endif
+:Return JSON:
+  status: success
+  query: ...
+  answer: ...
+  matches: N
+  chunks: [top_chunks];
+|Next.js (Proxy)|
+:Parse Data Response;
+|Browser (User)|
+:Render Chat UI\n(Jawaban & Source);
+stop
+
+' =============================================
+' ALUR 3: RESET DOKUMEN
+' =============================================
+|Browser (User)|
+start
+:Klik "Reset Dokumen";
+|Next.js (Proxy)|
+:POST /api/reset/;
+|FastAPI (Backend)|
+:Hapus file:
+  • .chunks.jsonl
+  • .metadata.txt
+  • .vectors.faiss;
+:Kosongkan state memori
+  (chunk_texts, doc_metadata,
+   embedding_index);
+:Return { status: "ok" };
+|Next.js (Proxy)|
+:Reset State UI;
+|Browser (User)|
+:Tampilan Chat\n& List File Kosong;
+stop
+@enduml
